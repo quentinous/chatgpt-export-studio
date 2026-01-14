@@ -20,6 +20,11 @@ from collections import defaultdict, Counter
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# Constants
+CHARS_PER_TOKEN = 4  # Rough estimation: 4 characters ≈ 1 token
+DEFAULT_CHUNK_SIZE = 1000  # tokens
+DEFAULT_OVERLAP = 0.15  # 15% overlap
+
 @dataclass
 class SSR:
     id: str
@@ -190,7 +195,9 @@ class ImportPipeline:
 class ChunkingEngine:
     def __init__(self, db_manager: DatabaseManager):
         self.db = db_manager
-    def chunk_conversation(self, conversation_id: str, target_size: int = 1000) -> List[Dict]:
+    
+    def chunk_conversation(self, conversation_id: str, target_size: int = DEFAULT_CHUNK_SIZE, 
+                          overlap: float = DEFAULT_OVERLAP) -> List[Dict]:
         cursor = self.db.conn.cursor()
         cursor.execute("SELECT id, role, content_text, turn_index, created_at FROM messages WHERE conversation_id = ? AND role IN ('user', 'assistant') ORDER BY turn_index", (conversation_id,))
         messages = [dict(row) for row in cursor.fetchall()]
@@ -200,12 +207,14 @@ class ChunkingEngine:
         current_chunk = []
         current_size = 0
         for msg in messages:
-            msg_size = len(msg['content_text']) // 4
+            msg_size = len(msg['content_text']) // CHARS_PER_TOKEN
             if current_size + msg_size > target_size and current_chunk:
                 chunk_data = self._create_chunk(conversation_id, current_chunk)
                 chunks.append(chunk_data)
-                current_chunk = [current_chunk[-1]]
-                current_size = len(current_chunk[0]['content_text']) // 4
+                # Calculate overlap: keep last N messages where total is ~overlap% of target
+                overlap_count = max(1, int(len(current_chunk) * overlap))
+                current_chunk = current_chunk[-overlap_count:]
+                current_size = sum(len(m['content_text']) // CHARS_PER_TOKEN for m in current_chunk)
             current_chunk.append(msg)
             current_size += msg_size
         if current_chunk:
@@ -214,7 +223,7 @@ class ChunkingEngine:
         return chunks
     def _create_chunk(self, conversation_id: str, messages: List[Dict]) -> Dict:
         content_text = '\n\n'.join(f"[{msg['role']}]: {msg['content_text']}" for msg in messages)
-        token_estimate = len(content_text) // 4
+        token_estimate = len(content_text) // CHARS_PER_TOKEN
         start_msg_id = messages[0]['id']
         end_msg_id = messages[-1]['id']
         created_at = messages[0]['created_at']
@@ -310,17 +319,22 @@ class ModelFoundry:
         cursor = self.db.conn.cursor()
         cursor.execute("SELECT m1.id as anchor_id, m1.content_text as anchor, m2.id as pos_id, m2.content_text as positive, m1.conversation_id FROM messages m1 JOIN messages m2 ON m2.parent_id = m1.id WHERE m1.role = 'user' AND m2.role = 'assistant' AND length(m1.content_text) > 10 AND length(m2.content_text) > 10 LIMIT ?", (max_triples,))
         anchors = cursor.fetchall()
-        cursor.execute("SELECT id, content_text, conversation_id FROM messages WHERE role = 'assistant' AND length(content_text) > 10 ORDER BY RANDOM() LIMIT ?", (max_triples,))
+        # Get more negatives than needed to account for filtering
+        cursor.execute("SELECT id, content_text, conversation_id FROM messages WHERE role = 'assistant' AND length(content_text) > 10 ORDER BY RANDOM() LIMIT ?", (max_triples * 2,))
         negatives = cursor.fetchall()
         triples = []
-        for i, anchor_row in enumerate(anchors):
-            if i >= len(negatives):
+        neg_idx = 0
+        for anchor_row in anchors:
+            if len(triples) >= max_triples:
                 break
-            neg_row = negatives[i]
-            if neg_row['conversation_id'] == anchor_row['conversation_id']:
-                continue
-            triple = {'anchor': anchor_row['anchor'], 'positive': anchor_row['positive'], 'negative': neg_row['content_text'], 'meta': {'anchor_id': anchor_row['anchor_id'], 'pos_id': anchor_row['pos_id']}}
-            triples.append(triple)
+            # Find a negative from a different conversation
+            while neg_idx < len(negatives):
+                neg_row = negatives[neg_idx]
+                neg_idx += 1
+                if neg_row['conversation_id'] != anchor_row['conversation_id']:
+                    triple = {'anchor': anchor_row['anchor'], 'positive': anchor_row['positive'], 'negative': neg_row['content_text'], 'meta': {'anchor_id': anchor_row['anchor_id'], 'pos_id': anchor_row['pos_id']}}
+                    triples.append(triple)
+                    break
         with open(os.path.join(output_dir, 'triples.jsonl'), 'w', encoding='utf-8') as f:
             for triple in triples:
                 f.write(json.dumps(triple) + '\n')
