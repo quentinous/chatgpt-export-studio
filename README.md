@@ -13,7 +13,14 @@ You point it at an official ChatGPT export ZIP (must include `conversations.json
   - Obsidian vault export (all conversations)
 - Optional PII redaction on exports
 
-## Install
+## One-click GUI setup (no terminal required)
+
+- **Install Python 3.10+** from [python.org](https://www.python.org/downloads/).
+- **Windows:** double-click `start_export_studio_gui.bat`. The first run creates `.venv`, installs requirements, and launches the neon GUI.
+- **macOS/Linux:** run `chmod +x start_export_studio_gui.sh` once, then double-click it (or run `./start_export_studio_gui.sh`). It sets up `.venv`, installs requirements, and launches the GUI.
+- In the GUI, click **Import ChatGPT Export** to pick your ZIP, then browse/search/export.
+
+## Manual install (CLI or advanced)
 
 ```bash
 python -m venv .venv

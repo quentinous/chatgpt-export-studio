@@ -515,14 +515,9 @@ class ExportStudioApp:
             return
 
         def work():
-            convs, msgs = import_export_zip(path)
-            # compute hash inside core; import_export_zip returns parsed objects
-            import hashlib
-            h = hashlib.sha256(open(path, "rb").read()).hexdigest()
-            n1 = self.db.upsert_conversations(convs, h)
-            n2 = self.db.upsert_messages(msgs)
+            stats = import_export_zip(self.db, path)
             self._refresh_conversations()
-            self._log(f"Import Complete: {n1} conversations, {n2} messages processed")
+            self._log(f"Import Complete: {stats['conversations']} conversations, {stats['messages']} messages processed")
 
         self._run_bg("Import ChatGPT Export", work)
 
@@ -591,10 +586,10 @@ class ExportStudioApp:
         def work():
             # In this local-first build, "embeddings" == chunk index (for retrieval).
             # If you want true vector embeddings, wire in your own model later.
-            chunker = Chunker(max_chars=2500, overlap_chars=250)
-            n = chunker.build_all(self.db)
-            self.embed_job.config(text="EMBEDDING JOB: 100% Complete")
-            self._log(f"Chunk index built: {n} chunks")
+            chunker = Chunker(self.db, max_chars=2500, overlap_chars=250)
+            stats = chunker.chunk_all()
+            self.embed_job.config(text=f"EMBEDDING JOB: {stats['chunks']} chunks built")
+            self._log(f"Chunk index built: {stats['chunks']} chunks across {stats['conversations']} conversations")
 
         self._run_bg("Generate Embeddings", work)
 

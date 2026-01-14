@@ -2,6 +2,8 @@
 
 ## Quick Start
 
+> Want the easiest path? Double-click `start_export_studio_gui.bat` (Windows) or `start_export_studio_gui.sh` (macOS/Linux) to auto-create a virtualenv, install dependencies, and launch the GUI. Then jump to **Explore Your Data** below.
+
 ### 1. Getting Your ChatGPT Export
 
 1. Go to ChatGPT Settings → Data Controls → Export Data
