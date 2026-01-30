@@ -1,6 +1,6 @@
 {
-  "name": "chatgpt-export-studio",
-  "private": true,
+  "name": "@quentin/chatgpt-export-studio",
+  "version": "2.0.0",
   "type": "module",
   "scripts": {
     "dev": "nuxt dev",
