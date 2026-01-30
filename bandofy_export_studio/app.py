@@ -23,8 +23,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    sub.add_parser("gui", help="Launch cyberpunk GUI")
-
     imp = sub.add_parser("import", help="Import official ChatGPT export ZIP")
     imp.add_argument("zip", help="Path to ChatGPT export ZIP")
 
@@ -59,11 +57,6 @@ def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     db = Database(args.db)
     try:
-        if args.cmd == "gui":
-            from .gui import ExportStudioApp
-            ExportStudioApp(db).run()
-            return 0
-
         if args.cmd == "import":
             stats = import_export_zip(db, args.zip)
             print(f"Imported conversations: {stats['conversations']}, messages: {stats['messages']}")

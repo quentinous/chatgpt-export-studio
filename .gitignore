@@ -1,3 +1,9 @@
+# Node / Nuxt
+node_modules/
+.nuxt/
+.output/
+dist/
+
 # Python
 __pycache__/
 *.py[cod]
