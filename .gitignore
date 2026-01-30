@@ -27,6 +27,10 @@ wheels/
 *.egg
 MANIFEST
 
+# Large export ZIPs (keep sample_export.zip for tests)
+examples/*.zip
+!examples/sample_export.zip
+
 # Database files
 *.db
 *.db-journal
