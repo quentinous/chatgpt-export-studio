@@ -1,88 +1,73 @@
-# Bandofy-AI :: Export Studio
+# ChatGPT Export Studio
 
-An offline, local-only **ChatGPT export explorer + transformer**.
+Offline-first tool to ingest, browse, search, and analyze ChatGPT export ZIPs. Combines a **Python CLI** (ingestion, chunking, fabric AI) with a **Nuxt 3 web UI** (browse, search, export, fabric AI actions).
 
-You point it at an official ChatGPT export ZIP (must include `conversations.json`), and it gives you:
+## Prerequisites
 
-- A cyberpunk-dark GUI for browsing and searching your history
-- SQLite storage + FTS search (fast)
-- Exports:
-  - Markdown (per conversation)
-  - Messages JSONL (all messages)
-  - Training pairs JSONL (user → assistant)
-  - Obsidian vault export (all conversations)
-- Optional PII redaction on exports
+- **Node.js** 18+
+- **Python** 3.10+
+- **wkhtmltopdf** (for PDF generation via fabric actions)
 
-## One-click GUI setup (no terminal required)
-
-- **Install Python 3.10+** from [python.org](https://www.python.org/downloads/).
-- **Windows:** double-click `start_export_studio_gui.bat`. The first run creates `.venv`, installs requirements, and launches the neon GUI.
-- **macOS/Linux:** run `chmod +x start_export_studio_gui.sh` once, then double-click it (or run `./start_export_studio_gui.sh`). It sets up `.venv`, installs requirements, and launches the GUI.
-- In the GUI, click **Import ChatGPT Export** to pick your ZIP, then browse/search/export.
-
-## Manual install (CLI or advanced)
+## Quick start
 
 ```bash
+git clone git@git.pelerin.lan:quentin/chatgpt-export-studio.git
+cd chatgpt-export-studio
+
+# Install dependencies
+npm install
 python -m venv .venv
-# Windows
-.venv\Scripts\activate
-# macOS/Linux
-source .venv/bin/activate
+.venv/bin/pip install markdown
 
-pip install -r requirements.txt
+# Import a ChatGPT export ZIP
+.venv/bin/python -m bandofy_export_studio.app --db bandofy_export_studio.sqlite3 import <path/to/export.zip>
+
+# Start the web UI
+npm run dev
 ```
 
-## Run (GUI)
+The app opens at `http://localhost:3000`.
+
+## Production build
 
 ```bash
-python -m bandofy_export_studio gui
+npm run build
+node .output/server/index.mjs
 ```
 
-## Run (CLI)
-
-Import:
+## CLI commands
 
 ```bash
-python -m bandofy_export_studio import "path\to\chatgpt_export.zip"
+# Import a ChatGPT export ZIP
+.venv/bin/python -m bandofy_export_studio.app import <path/to/export.zip>
+
+# List conversations
+.venv/bin/python -m bandofy_export_studio.app list --limit 50
+
+# Export a conversation as Markdown
+.venv/bin/python -m bandofy_export_studio.app export-md <conversation_id> --out out.md --redact
+
+# Export all messages as JSONL
+.venv/bin/python -m bandofy_export_studio.app export-messages-jsonl --out messages.jsonl
+
+# Export training pairs (user → assistant) as JSONL
+.venv/bin/python -m bandofy_export_studio.app export-pairs-jsonl --out pairs.jsonl
+
+# Export as Obsidian vault
+.venv/bin/python -m bandofy_export_studio.app export-obsidian --out-dir vault_dir
+
+# Chunk conversations for RAG
+.venv/bin/python -m bandofy_export_studio.app chunk --max-chars 2500 --overlap-chars 250
 ```
 
-List:
+## Fabric AI actions
 
-```bash
-python -m bandofy_export_studio list --limit 50
-```
+The web UI integrates with [fabric](https://github.com/danielmiessler/fabric) to run AI patterns on conversations and projects (extract_wisdom, summarize, analyze_debate, etc.). Results are generated as PDFs and cached in `generated/`.
 
-Export Markdown:
-
-```bash
-python -m bandofy_export_studio export-md <conversation_id> --out out.md --redact
-```
-
-Export messages JSONL:
-
-```bash
-python -m bandofy_export_studio export-messages-jsonl --out messages.jsonl
-```
-
-Export training pairs JSONL:
-
-```bash
-python -m bandofy_export_studio export-pairs-jsonl --out pairs.jsonl
-```
-
-Export Obsidian vault:
-
-```bash
-python -m bandofy_export_studio export-obsidian --out-dir vault_dir
-```
-
-Chunk:
-
-```bash
-python -m bandofy_export_studio chunk --max-chars 2500 --overlap-chars 250
-```
+Requires `fabric` CLI installed and configured with a vendor/model.
 
 ## Notes
 
-- **No network calls**: This is intended to run fully offline.
-- The parser supports the typical official export structure; if your export differs, open an issue and attach the schema (not your private content).
+- **No network calls** for core features — import, browse, search, and export all run fully offline.
+- Fabric AI actions require network access to reach the configured LLM provider.
+- The parser supports the typical official ChatGPT export structure; if your export differs, open an issue.
