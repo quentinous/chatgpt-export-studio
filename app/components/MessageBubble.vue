@@ -25,11 +25,10 @@
         </span>
       </div>
       <div
-        class="rounded-xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap break-words text-zinc-800"
-        :class="isUser ? 'bg-blue-50 border border-blue-200' : 'bg-white border border-zinc-200 shadow-sm'"
-      >
-        {{ message.content_text }}
-      </div>
+        class="rounded-xl px-4 py-3 text-sm prose prose-sm prose-zinc max-w-none"
+        :class="isUser ? 'bg-blue-50 border border-blue-200 prose-headings:text-blue-900 prose-code:text-blue-800' : 'bg-white border border-zinc-200 shadow-sm prose-headings:text-zinc-900'"
+        v-html="renderedContent"
+      />
     </div>
   </div>
 </template>
@@ -42,4 +41,7 @@ const props = defineProps<{
 }>()
 
 const isUser = computed(() => props.message.role === 'user')
+
+const { parseMarkdown } = useMarkdown()
+const renderedContent = computed(() => parseMarkdown(props.message.content_text || ''))
 </script>
