@@ -1,7 +1,7 @@
 <template>
-  <div class="rounded-xl bg-zinc-900 border border-zinc-800 px-5 py-4">
-    <p class="text-zinc-400 text-xs font-medium uppercase tracking-wider">{{ label }}</p>
-    <p class="text-2xl font-semibold text-zinc-50 mt-1 font-mono">{{ formatted }}</p>
+  <div class="rounded-xl bg-white border border-zinc-200 px-5 py-4 shadow-sm">
+    <p class="text-zinc-500 text-xs font-medium uppercase tracking-wider">{{ label }}</p>
+    <p class="text-2xl font-semibold text-zinc-900 mt-1 font-mono">{{ formatted }}</p>
   </div>
 </template>
 

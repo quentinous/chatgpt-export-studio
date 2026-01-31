@@ -13,7 +13,7 @@ import argparse
 import os
 from pathlib import Path
 
-from .core import Database, import_export_zip, export_conversation_markdown, export_messages_jsonl, export_training_pairs_jsonl, export_obsidian_vault, Chunker
+from .core import Database, import_export_zip, export_conversation_markdown, export_messages_jsonl, export_training_pairs_jsonl, export_obsidian_vault, Chunker, rename_projects_with_fabric
 
 DEFAULT_DB = "bandofy_export_studio.sqlite3"
 
@@ -50,6 +50,10 @@ def build_parser() -> argparse.ArgumentParser:
     ch = sub.add_parser("chunk", help="Build chunks for all conversations")
     ch.add_argument("--max-chars", type=int, default=2500)
     ch.add_argument("--overlap-chars", type=int, default=250)
+
+    rn = sub.add_parser("rename-projects", help="Auto-name projects using fabric AI")
+    rn.add_argument("--vendor", default="GrokAI", help="fabric vendor (default: GrokAI)")
+    rn.add_argument("--model", default="grok-4-1-fast-non-reasoning", help="fabric model (default: grok-4-1-fast-non-reasoning)")
 
     return p
 
@@ -94,6 +98,16 @@ def main(argv=None) -> int:
             ch = Chunker(db, max_chars=args.max_chars, overlap_chars=args.overlap_chars)
             stats = ch.chunk_all()
             print(f"Chunked {stats['chunks']} chunks across {stats['conversations']} conversations")
+            return 0
+
+        if args.cmd == "rename-projects":
+            results = rename_projects_with_fabric(db, vendor=args.vendor, model=args.model)
+            if not results:
+                print("No projects renamed.")
+            else:
+                for gizmo_id, name in results.items():
+                    print(f"  {gizmo_id} -> {name}")
+                print(f"Renamed {len(results)} project(s).")
             return 0
 
         raise RuntimeError("Unhandled command")

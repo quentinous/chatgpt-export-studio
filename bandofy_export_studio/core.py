@@ -14,6 +14,7 @@ import json
 import os
 import re
 import sqlite3
+import subprocess
 import zipfile
 import hashlib
 import time
@@ -66,6 +67,7 @@ class ParsedMessage:
     message_id: str
     conversation_id: str
     role: str
+    content_type: str
     content_text: str
     created_at: int
     turn_index: int
@@ -77,6 +79,14 @@ class ParsedConversation:
     created_at: int
     updated_at: int
     message_count: int
+    gizmo_id: Optional[str] = None
+    default_model_slug: Optional[str] = None
+
+@dataclass
+class ParsedProject:
+    gizmo_id: str
+    gizmo_type: str  # "snorlax" (project) or "gpt" (custom GPT)
+    display_name: str
 
 def _extract_text_from_message_obj(msg: Dict[str, Any]) -> str:
     """
@@ -100,13 +110,14 @@ def _extract_text_from_message_obj(msg: Dict[str, Any]) -> str:
     v = msg.get("text")
     return safe_str(v).strip()
 
-def parse_conversations_json(conversations: Any) -> Tuple[List[ParsedConversation], List[ParsedMessage]]:
+def parse_conversations_json(conversations: Any) -> Tuple[List[ParsedConversation], List[ParsedMessage], List[ParsedProject]]:
     """
     Parse a loaded conversations.json (list of conversations).
-    Returns (conversations, messages).
+    Returns (conversations, messages, projects).
     """
     parsed_convs: List[ParsedConversation] = []
     parsed_msgs: List[ParsedMessage] = []
+    seen_projects: Dict[str, ParsedProject] = {}
 
     if not isinstance(conversations, list):
         raise ValueError("conversations.json root must be a list")
@@ -124,8 +135,28 @@ def parse_conversations_json(conversations: Any) -> Tuple[List[ParsedConversatio
         created_at = int(conv.get("create_time") or conv.get("created_at") or 0) or 0
         updated_at = int(conv.get("update_time") or conv.get("updated_at") or created_at) or created_at
 
+        default_model_slug = conv.get("default_model_slug") or None
+
+        # Extract gizmo_id (ChatGPT project or custom GPT)
+        gizmo_id = conv.get("gizmo_id") or conv.get("conversation_template_id") or None
+        if gizmo_id and gizmo_id not in seen_projects:
+            # g-p-* = ChatGPT Project (snorlax), g-* without -p- = Custom GPT
+            if "-p-" in gizmo_id:
+                gizmo_type = "snorlax"
+                suffix = gizmo_id[-4:]
+                display_name = f"Project ({suffix})"
+            else:
+                gizmo_type = "gpt"
+                suffix = gizmo_id[-4:]
+                display_name = f"GPT ({suffix})"
+            seen_projects[gizmo_id] = ParsedProject(
+                gizmo_id=gizmo_id,
+                gizmo_type=gizmo_type,
+                display_name=display_name,
+            )
+
         mapping = conv.get("mapping")
-        messages: List[Tuple[int, str, str, str]] = []  # (created_at, msg_id, role, text)
+        messages: List[Tuple[int, str, str, str, str]] = []  # (created_at, msg_id, role, text, content_type)
 
         if isinstance(mapping, dict):
             for node_id, node in mapping.items():
@@ -143,12 +174,14 @@ def parse_conversations_json(conversations: Any) -> Tuple[List[ParsedConversatio
                 text = _extract_text_from_message_obj(msg)
                 if not text:
                     continue
+                content = msg.get("content") or {}
+                content_type = safe_str((content.get("content_type") if isinstance(content, dict) else "") or "text") or "text"
                 m_created = msg.get("create_time") or node.get("create_time") or created_at
                 try:
                     m_created_i = int(m_created or 0)
                 except Exception:
                     m_created_i = 0
-                messages.append((m_created_i, msg_id, role or "unknown", text))
+                messages.append((m_created_i, msg_id, role or "unknown", text, content_type))
 
         # Some formats store messages as a list directly
         elif isinstance(conv.get("messages"), list):
@@ -160,20 +193,23 @@ def parse_conversations_json(conversations: Any) -> Tuple[List[ParsedConversatio
                 text = _extract_text_from_message_obj(msg) or safe_str(msg.get("content") or "")
                 if not text:
                     continue
+                content = msg.get("content") or {}
+                content_type = safe_str((content.get("content_type") if isinstance(content, dict) else "") or "text") or "text"
                 m_created = msg.get("create_time") or msg.get("created_at") or created_at
                 try:
                     m_created_i = int(m_created or 0)
                 except Exception:
                     m_created_i = 0
-                messages.append((m_created_i, msg_id or sha256_text(conv_id + text)[:16], role, text))
+                messages.append((m_created_i, msg_id or sha256_text(conv_id + text)[:16], role, text, content_type))
 
         messages.sort(key=lambda x: (x[0], x[1]))
-        for i, (m_created_i, msg_id, role, text) in enumerate(messages):
+        for i, (m_created_i, msg_id, role, text, content_type) in enumerate(messages):
             parsed_msgs.append(
                 ParsedMessage(
                     message_id=msg_id,
                     conversation_id=conv_id,
                     role=role,
+                    content_type=content_type,
                     content_text=text,
                     created_at=m_created_i,
                     turn_index=i,
@@ -187,10 +223,12 @@ def parse_conversations_json(conversations: Any) -> Tuple[List[ParsedConversatio
                 created_at=created_at,
                 updated_at=updated_at,
                 message_count=len(messages),
+                gizmo_id=gizmo_id,
+                default_model_slug=default_model_slug,
             )
         )
 
-    return parsed_convs, parsed_msgs
+    return parsed_convs, parsed_msgs, list(seen_projects.values())
 
 def load_conversations_from_export_zip(zip_path: str) -> Any:
     """
@@ -219,19 +257,31 @@ SCHEMA_SQL = r"""
 PRAGMA journal_mode=WAL;
 PRAGMA synchronous=NORMAL;
 
+CREATE TABLE IF NOT EXISTS projects (
+  gizmo_id TEXT PRIMARY KEY,
+  gizmo_type TEXT NOT NULL DEFAULT 'snorlax',
+  display_name TEXT NOT NULL DEFAULT '',
+  created_at INTEGER
+);
+
 CREATE TABLE IF NOT EXISTS conversations (
   id TEXT PRIMARY KEY,
   title TEXT,
   created_at INTEGER,
   updated_at INTEGER,
   message_count INTEGER,
-  source_hash TEXT
+  source_hash TEXT,
+  gizmo_id TEXT REFERENCES projects(gizmo_id),
+  default_model_slug TEXT
 );
+
+CREATE INDEX IF NOT EXISTS idx_conversations_gizmo ON conversations(gizmo_id);
 
 CREATE TABLE IF NOT EXISTS messages (
   id TEXT PRIMARY KEY,
   conversation_id TEXT,
   role TEXT,
+  content_type TEXT NOT NULL DEFAULT 'text',
   content_text TEXT,
   created_at INTEGER,
   turn_index INTEGER,
@@ -282,6 +332,17 @@ class Database:
     def _init(self) -> None:
         cur = self.conn.cursor()
         cur.executescript(SCHEMA_SQL)
+        # Migrations for older schemas
+        cur.execute("PRAGMA table_info(conversations)")
+        conv_cols = {row[1] for row in cur.fetchall()}
+        if "gizmo_id" not in conv_cols:
+            cur.execute("ALTER TABLE conversations ADD COLUMN gizmo_id TEXT REFERENCES projects(gizmo_id)")
+        if "default_model_slug" not in conv_cols:
+            cur.execute("ALTER TABLE conversations ADD COLUMN default_model_slug TEXT")
+        cur.execute("PRAGMA table_info(messages)")
+        msg_cols = {row[1] for row in cur.fetchall()}
+        if "content_type" not in msg_cols:
+            cur.execute("ALTER TABLE messages ADD COLUMN content_type TEXT NOT NULL DEFAULT 'text'")
         self.conn.commit()
 
     def close(self) -> None:
@@ -294,22 +355,41 @@ class Database:
     # Upserts
     # -------------
 
+    def upsert_projects(self, projects: List[ParsedProject]) -> int:
+        cur = self.conn.cursor()
+        n = 0
+        for p in projects:
+            cur.execute(
+                """
+                INSERT INTO projects(gizmo_id, gizmo_type, display_name, created_at)
+                VALUES(?, ?, ?, ?)
+                ON CONFLICT(gizmo_id) DO UPDATE SET
+                  gizmo_type=excluded.gizmo_type
+                """,
+                (p.gizmo_id, p.gizmo_type, p.display_name, now_ts()),
+            )
+            n += 1
+        self.conn.commit()
+        return n
+
     def upsert_conversations(self, convs: List[ParsedConversation], source_hash: str) -> int:
         cur = self.conn.cursor()
         n = 0
         for c in convs:
             cur.execute(
                 """
-                INSERT INTO conversations(id,title,created_at,updated_at,message_count,source_hash)
-                VALUES(?,?,?,?,?,?)
+                INSERT INTO conversations(id,title,created_at,updated_at,message_count,source_hash,gizmo_id,default_model_slug)
+                VALUES(?,?,?,?,?,?,?,?)
                 ON CONFLICT(id) DO UPDATE SET
                   title=excluded.title,
                   created_at=excluded.created_at,
                   updated_at=excluded.updated_at,
                   message_count=excluded.message_count,
-                  source_hash=excluded.source_hash
+                  source_hash=excluded.source_hash,
+                  gizmo_id=excluded.gizmo_id,
+                  default_model_slug=excluded.default_model_slug
                 """,
-                (c.conversation_id, c.title, c.created_at, c.updated_at, c.message_count, source_hash),
+                (c.conversation_id, c.title, c.created_at, c.updated_at, c.message_count, source_hash, c.gizmo_id, c.default_model_slug),
             )
             n += 1
         self.conn.commit()
@@ -321,16 +401,17 @@ class Database:
         for m in msgs:
             cur.execute(
                 """
-                INSERT INTO messages(id,conversation_id,role,content_text,created_at,turn_index)
-                VALUES(?,?,?,?,?,?)
+                INSERT INTO messages(id,conversation_id,role,content_type,content_text,created_at,turn_index)
+                VALUES(?,?,?,?,?,?,?)
                 ON CONFLICT(id) DO UPDATE SET
                   conversation_id=excluded.conversation_id,
                   role=excluded.role,
+                  content_type=excluded.content_type,
                   content_text=excluded.content_text,
                   created_at=excluded.created_at,
                   turn_index=excluded.turn_index
                 """,
-                (m.message_id, m.conversation_id, m.role, m.content_text, m.created_at, m.turn_index),
+                (m.message_id, m.conversation_id, m.role, m.content_type, m.content_text, m.created_at, m.turn_index),
             )
             n += 1
         self.conn.commit()
@@ -340,37 +421,35 @@ class Database:
     # Queries
     # -------------
 
-    def list_conversations(self, limit: int = 200, offset: int = 0, search: str = "") -> List[Dict[str, Any]]:
+    def list_conversations(self, limit: int = 200, offset: int = 0, search: str = "", gizmo_id: Optional[str] = None) -> List[Dict[str, Any]]:
         cur = self.conn.cursor()
+        conditions: List[str] = []
+        params: List[Any] = []
         if search.strip():
-            like = f"%{search.strip()}%"
-            cur.execute(
-                """
-                SELECT id,title,created_at,updated_at,message_count
-                FROM conversations
-                WHERE title LIKE ?
-                ORDER BY updated_at DESC
-                LIMIT ? OFFSET ?
-                """,
-                (like, limit, offset),
-            )
-        else:
-            cur.execute(
-                """
-                SELECT id,title,created_at,updated_at,message_count
-                FROM conversations
-                ORDER BY updated_at DESC
-                LIMIT ? OFFSET ?
-                """,
-                (limit, offset),
-            )
+            conditions.append("title LIKE ?")
+            params.append(f"%{search.strip()}%")
+        if gizmo_id:
+            conditions.append("gizmo_id = ?")
+            params.append(gizmo_id)
+        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+        params.extend([limit, offset])
+        cur.execute(
+            f"""
+            SELECT id,title,created_at,updated_at,message_count,gizmo_id,default_model_slug
+            FROM conversations
+            {where}
+            ORDER BY updated_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            params,
+        )
         return [dict(r) for r in cur.fetchall()]
 
     def get_messages_for_conversation(self, conversation_id: str) -> List[Dict[str, Any]]:
         cur = self.conn.cursor()
         cur.execute(
             """
-            SELECT id,role,content_text,created_at,turn_index
+            SELECT id,role,content_type,content_text,created_at,turn_index
             FROM messages
             WHERE conversation_id=?
             ORDER BY turn_index ASC
@@ -415,6 +494,20 @@ class Database:
             )
             return [dict(r) for r in cur.fetchall()]
 
+    def list_projects(self) -> List[Dict[str, Any]]:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            SELECT p.gizmo_id, p.gizmo_type, p.display_name,
+                   COUNT(c.id) AS conversation_count
+            FROM projects p
+            LEFT JOIN conversations c ON c.gizmo_id = p.gizmo_id
+            GROUP BY p.gizmo_id
+            ORDER BY conversation_count DESC
+            """
+        )
+        return [dict(r) for r in cur.fetchall()]
+
     def stats(self) -> Dict[str, int]:
         cur = self.conn.cursor()
         cur.execute("SELECT COUNT(*) AS n FROM conversations")
@@ -423,7 +516,17 @@ class Database:
         msgs = int(cur.fetchone()["n"])
         cur.execute("SELECT COUNT(*) AS n FROM chunks")
         chunks = int(cur.fetchone()["n"])
-        return {"conversations": convs, "messages": msgs, "chunks": chunks}
+        cur.execute("SELECT COUNT(*) AS n FROM projects")
+        projects = int(cur.fetchone()["n"])
+        return {"conversations": convs, "messages": msgs, "chunks": chunks, "projects": projects}
+
+    def rename_project(self, gizmo_id: str, display_name: str) -> None:
+        cur = self.conn.cursor()
+        cur.execute(
+            "UPDATE projects SET display_name = ? WHERE gizmo_id = ?",
+            (display_name, gizmo_id),
+        )
+        self.conn.commit()
 
 # -------------------------------
 # Chunking Engine
@@ -499,10 +602,11 @@ def import_export_zip(db: Database, zip_path: str) -> Dict[str, Any]:
     raw = load_conversations_from_export_zip(zip_path)
     # source hash ties DB state to artifact deterministically
     source_hash = sha256_text(json.dumps(raw, sort_keys=True)[:2_000_000])
-    convs, msgs = parse_conversations_json(raw)
+    convs, msgs, projects = parse_conversations_json(raw)
+    p_n = db.upsert_projects(projects)
     c_n = db.upsert_conversations(convs, source_hash=source_hash)
     m_n = db.upsert_messages(msgs)
-    return {"conversations": c_n, "messages": m_n, "source_hash": source_hash}
+    return {"conversations": c_n, "messages": m_n, "projects": p_n, "source_hash": source_hash}
 
 def export_conversation_markdown(db: Database, conversation_id: str, redact: bool = False) -> str:
     cur = db.conn.cursor()
@@ -588,3 +692,44 @@ def export_obsidian_vault(db: Database, out_dir: str, redact: bool = False) -> D
     with open(os.path.join(out_dir, "INDEX.md"), "w", encoding="utf-8") as f:
         f.write("\n".join(index_lines).strip() + "\n")
     return {"conversations": len(convs), "files_written": written}
+
+
+def rename_projects_with_fabric(db: Database, vendor: str = "GrokAI", model: str = "grok-4-1-fast-non-reasoning", max_titles: int = 30) -> Dict[str, str]:
+    """
+    Use fabric-ai to generate short display names for each project
+    based on its conversation titles.
+    Returns {gizmo_id: new_display_name}.
+    """
+    projects = db.list_projects()
+    results: Dict[str, str] = {}
+
+    for proj in projects:
+        gizmo_id = proj["gizmo_id"]
+        convs = db.list_conversations(limit=max_titles, gizmo_id=gizmo_id)
+        titles = [c["title"] for c in convs if c.get("title")]
+        if not titles:
+            continue
+
+        input_text = "\n".join(titles[:max_titles])
+        try:
+            proc = subprocess.run(
+                ["fabric", "-p", "name_project", "-V", vendor, "-m", model],
+                input=input_text,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            name = proc.stdout.strip()
+            if not name or proc.returncode != 0:
+                print(f"  [SKIP] {gizmo_id}: fabric error: {proc.stderr.strip()}")
+                continue
+            # Take only the first line in case of extra output
+            name = name.splitlines()[0].strip()
+            db.rename_project(gizmo_id, name)
+            results[gizmo_id] = name
+        except FileNotFoundError:
+            raise RuntimeError("fabric CLI not found. Install it: https://github.com/danielmiessler/fabric")
+        except subprocess.TimeoutExpired:
+            print(f"  [SKIP] {gizmo_id}: fabric timed out")
+
+    return results

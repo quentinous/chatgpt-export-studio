@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3'
 import { resolve } from 'path'
-import type { Conversation, Message, SearchHit, Stats } from '~~/shared/types'
+import type { Conversation, Message, Project, SearchHit, Stats } from '~~/shared/types'
 
 const DB_PATH = resolve(process.cwd(), 'bandofy_export_studio.sqlite3')
 
@@ -14,39 +14,45 @@ function getDb(): Database.Database {
   return _db
 }
 
-export function listConversations(limit = 50, offset = 0, search = ''): Conversation[] {
+export function listConversations(limit = 50, offset = 0, search = '', gizmoId = ''): Conversation[] {
   const db = getDb()
+  const conditions: string[] = []
+  const params: (string | number)[] = []
   if (search.trim()) {
-    const like = `%${search.trim()}%`
-    return db.prepare(`
-      SELECT id, title, created_at, updated_at, message_count
-      FROM conversations
-      WHERE title LIKE ?
-      ORDER BY updated_at DESC
-      LIMIT ? OFFSET ?
-    `).all(like, limit, offset) as Conversation[]
+    conditions.push('title LIKE ?')
+    params.push(`%${search.trim()}%`)
   }
+  if (gizmoId.trim()) {
+    conditions.push('gizmo_id = ?')
+    params.push(gizmoId.trim())
+  }
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
+  params.push(limit, offset)
   return db.prepare(`
-    SELECT id, title, created_at, updated_at, message_count
+    SELECT id, title, created_at, updated_at, message_count, gizmo_id, default_model_slug
     FROM conversations
+    ${where}
     ORDER BY updated_at DESC
     LIMIT ? OFFSET ?
-  `).all(limit, offset) as Conversation[]
+  `).all(...params) as Conversation[]
 }
 
 export function getConversation(id: string): Conversation | undefined {
   const db = getDb()
   return db.prepare(`
-    SELECT id, title, created_at, updated_at, message_count
-    FROM conversations
-    WHERE id = ?
+    SELECT c.id, c.title, c.created_at, c.updated_at, c.message_count, c.gizmo_id,
+           c.default_model_slug,
+           p.display_name AS project_display_name, p.gizmo_type AS project_gizmo_type
+    FROM conversations c
+    LEFT JOIN projects p ON c.gizmo_id = p.gizmo_id
+    WHERE c.id = ?
   `).get(id) as Conversation | undefined
 }
 
 export function getMessages(conversationId: string): Message[] {
   const db = getDb()
   return db.prepare(`
-    SELECT id, role, content_text, created_at, turn_index
+    SELECT id, role, content_type, content_text, created_at, turn_index
     FROM messages
     WHERE conversation_id = ?
     ORDER BY turn_index ASC
@@ -85,7 +91,29 @@ export function getStats(): Stats {
   const convs = (db.prepare('SELECT COUNT(*) AS n FROM conversations').get() as { n: number }).n
   const msgs = (db.prepare('SELECT COUNT(*) AS n FROM messages').get() as { n: number }).n
   const chunks = (db.prepare('SELECT COUNT(*) AS n FROM chunks').get() as { n: number }).n
-  return { conversations: convs, messages: msgs, chunks: chunks }
+  let projects = 0
+  try {
+    projects = (db.prepare('SELECT COUNT(*) AS n FROM projects').get() as { n: number }).n
+  } catch {
+    // projects table may not exist in older DBs opened read-only
+  }
+  return { conversations: convs, messages: msgs, chunks: chunks, projects }
+}
+
+export function listProjects(): Project[] {
+  const db = getDb()
+  try {
+    return db.prepare(`
+      SELECT p.gizmo_id, p.gizmo_type, p.display_name,
+             COUNT(c.id) AS conversation_count
+      FROM projects p
+      LEFT JOIN conversations c ON c.gizmo_id = p.gizmo_id
+      GROUP BY p.gizmo_id
+      ORDER BY conversation_count DESC
+    `).all() as Project[]
+  } catch {
+    return []
+  }
 }
 
 export function exportConversationMarkdown(conversationId: string): string {

@@ -1,7 +1,8 @@
 <template>
-  <aside class="h-full flex flex-col bg-zinc-900 border-r border-zinc-700">
-    <div class="p-3 border-b border-zinc-700">
+  <aside class="h-full flex flex-col bg-zinc-50 border-r border-zinc-200">
+    <div class="p-3 border-b border-zinc-200 space-y-2">
       <SearchInput v-model="search" placeholder="Search conversations..." />
+      <ProjectFilter v-model="gizmoId" :projects="projects" />
     </div>
     <div ref="scrollContainer" class="flex-1 overflow-y-auto p-2 space-y-0.5" @scroll="onScroll">
       <ConversationListItem
@@ -10,8 +11,8 @@
         :conversation="conv"
         :active="conv.id === activeId"
       />
-      <div v-if="loading" class="py-4 text-center text-zinc-500 text-xs">Loading...</div>
-      <div v-else-if="conversations.length === 0" class="py-8 text-center text-zinc-500 text-sm">
+      <div v-if="loading" class="py-4 text-center text-zinc-400 text-xs">Loading...</div>
+      <div v-else-if="conversations.length === 0" class="py-8 text-center text-zinc-400 text-sm">
         No conversations found
       </div>
     </div>
@@ -22,7 +23,8 @@
 const route = useRoute()
 const activeId = computed(() => route.params.id as string || '')
 
-const { conversations, search, loading, loadMore, hasMore } = useConversations()
+const { conversations, search, gizmoId, loading, loadMore, hasMore } = useConversations()
+const { projects } = useProjects()
 
 const scrollContainer = ref<HTMLElement>()
 

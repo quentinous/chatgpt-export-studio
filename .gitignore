@@ -79,6 +79,7 @@ tmp/
 exports/
 output/
 outputs/
+generated/
 corpus/
 ssr/
 pairs/

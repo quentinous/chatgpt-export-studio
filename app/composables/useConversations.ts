@@ -1,8 +1,10 @@
 import type { Conversation } from '~~/shared/types'
 
 export function useConversations() {
+  const route = useRoute()
   const conversations = ref<Conversation[]>([])
   const search = ref('')
+  const gizmoId = ref((route.query.project as string) || '')
   const loading = ref(false)
   const hasMore = ref(true)
   const offset = ref(0)
@@ -18,9 +20,15 @@ export function useConversations() {
     if (!hasMore.value && !reset) return
     loading.value = true
     try {
-      const data = await $fetch<Conversation[]>('/api/conversations', {
-        params: { limit: PAGE_SIZE, offset: offset.value, search: search.value },
-      })
+      const params: Record<string, string | number> = {
+        limit: PAGE_SIZE,
+        offset: offset.value,
+        search: search.value,
+      }
+      if (gizmoId.value) {
+        params.gizmo_id = gizmoId.value
+      }
+      const data = await $fetch<Conversation[]>('/api/conversations', { params })
       if (reset) {
         conversations.value = data
       } else {
@@ -44,8 +52,16 @@ export function useConversations() {
     debounceTimer = setTimeout(() => fetchConversations(true), 300)
   })
 
+  watch(gizmoId, () => {
+    fetchConversations(true)
+  })
+
+  watch(() => route.query.project, (val) => {
+    gizmoId.value = (val as string) || ''
+  })
+
   // initial load
   fetchConversations(true)
 
-  return { conversations, search, loading, hasMore, loadMore }
+  return { conversations, search, gizmoId, loading, hasMore, loadMore }
 }
